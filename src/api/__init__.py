@@ -1,13 +1,9 @@
-"""API integrations for external services"""
+"""API Integrations and Singleton Connection Clients for external services"""
 
-from .azure_openai import AzureOpenAIClient
-from .gmail_client import GmailClient
-from .calendar_client import CalendarClient
-from .tasks_client import TasksClient
+from .google_auth import GoogleAuthManager
+from .gemini_client import GeminiClient
 
 __all__ = [
-    "AzureOpenAIClient",
-    "GmailClient",
-    "CalendarClient",
-    "TasksClient"
+    "GoogleAuthManager",
+    "GeminiClient"
 ]

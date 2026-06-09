@@ -1,49 +1,29 @@
-# Core Framework
-langgraph
-langchain
-langchain-openai
-langchain-community
+# Core Framework & Async
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+tiktoken
+loguru
+tenacity
+python-dotenv
+asyncio
 
-# Azure OpenAI
-openai
-azure-identity
+# Google GenAI Integration (FREE TIER)
+google-genai>=0.1.0
 
-# Google APIs
+# Google Workspace APIs
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
 google-api-python-client
 
-# Vector Database
-chromadb
-sentence-transformers
-
-# Data Processing
-pandas
-numpy
+# Vector Database & Data Processing
+chromadb>=0.4.0
 python-dateutil
-
-# Email Processing
-email-validator
 beautifulsoup4
 html2text
+pandas
+numpy
 
-# Utilities
-python-dotenv
-pydantic
-pydantic-settings
-tiktoken
-
-# Async Support
-aiohttp
-asyncio
-
-# Logging and Monitoring
-loguru
-tenacity
-
-# Development
-pytest
-pytest-asyncio
-black
+# Development & Linting
 ruff
+black
