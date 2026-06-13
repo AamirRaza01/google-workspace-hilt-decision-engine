@@ -54,31 +54,79 @@ workspace-agent/
 ├── requirements.txt             # Clean pinned installation dependencies
 └── main_autonomous.py           # Interactive central CLI terminal entry point
 
+---
 
-## 🛠️ Installation & Setup
+## Installation & Setup
 
-### 1. Clone the Repository 
+### 1. Clone the Repository
+
 ```bash
-git clone [https://github.com/your-username/workspace-agent.git](https://github.com/your-username/workspace-agent.git)
+git clone https://github.com/your-username/workspace-agent.git
 cd workspace-agent
+```
 
-### 2. Configure Your Environment Variables
+### 2. Create a Virtual Environment
+
 ```bash
+python -m venv venv
+```
+
+Activate the environment:
+
+**Windows**
+
+```bash
+venv\Scripts\activate
+```
+
+**Linux / macOS**
+
+```bash
+source venv/bin/activate
+```
+
+### 3. Configure Environment Variables
+
+Create a `.env` file in the project root.
+
+```env
 GEMINI_API_KEY=your_google_ai_studio_api_key
-GEMINI_MODEL=your_gemini_model
+GEMINI_MODEL=gemini-2.5-flash
+
 CHROMA_PERSIST_DIRECTORY=data/chroma_db
 CHROMA_COLLECTION_NAME=workspace_rag_memory
+```
 
-### 3. Setup Google Cloud Platform Credentials
+### 4. Setup Google Cloud Credentials
 
-* Go to the Google Cloud Console, create a project, and enable the Gmail API, Google Calendar API, and Tasks API.
-* Configure your OAuth Consent Screen in Testing status and add your email to the Test Users authorized whitelist.
-* Download your OAuth 2.0 Client ID Credentials JSON file, rename it to credentials.json, and place it in your project root directory.
+1. Open Google Cloud Console.
+2. Create a new project.
+3. Enable:
+   - Gmail API
+   - Google Calendar API
+   - Google Drive API (optional)
+4. Configure the OAuth Consent Screen.
+5. Add your Gmail account as a Test User.
+6. Create OAuth Client Credentials.
+7. Download the JSON credentials file.
+8. Rename it to:
 
-### 4. Install Dependencies
+```text
+credentials.json
+```
+
+9. Place it in the project root directory.
+
+### 5. Install Dependencies
+
 ```bash
 pip install -r requirements.txt
+```
 
-### 5. Run the main script
+### 6. Run the Application
+
 ```bash
 python main_autonomous.py
+```
+
+---
