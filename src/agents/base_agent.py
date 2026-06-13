@@ -1,342 +1,143 @@
 """
-Base Agent with ReAct Pattern
-LLM-driven autonomous decision making
+Base ReAct (Reasoning + Acting) Agent Core
+Autonomously coordinates tool invocation pipelines and collects execution observations.
 """
 
-from typing import List, Dict, Any, Optional
-from datetime import datetime
-from src.config import get_settings
-from src.utils import get_logger
-from src.api import AzureOpenAIClient
 import json
+import asyncio
+from typing import Dict, Any, List, Callable
+from src.api.gemini_client import GeminiClient
+from src.config.settings import get_settings
+from src.utils.logger import get_logger
+from src.agents.schemas import AgentDecision
 
 logger = get_logger()
 
-
-class BaseAgent:
-    """
-    Base autonomous agent using ReAct (Reasoning + Acting) pattern
-    LLM decides which tools to use based on the query
-    """
+class BaseWorkspaceAgent:
+    """Core reasoning engine processing multi-turn workspace tool execution loops."""
     
     def __init__(self):
         self.settings = get_settings()
-        self.azure_client = AzureOpenAIClient()
-        self.available_tools = {}
-        self.max_iterations = 10
-    
-    def register_tool(self, name: str, function: callable, description: str, parameters: Dict[str, str]):
-        """
-        Register a tool that the agent can use
-        
-        Args:
-            name: Tool name
-            function: Callable function
-            description: What the tool does
-            parameters: Parameter descriptions
-        """
-        self.available_tools[name] = {
-            "function": function,
+        self.gemini_client = GeminiClient()
+        self.tools_registry: Dict[str, Dict[str, Any]] = {}
+
+    def register_workspace_tool(self, name: str, func: Callable, description: str, parameter_definitions: str):
+        """Binds a localized python execution method wrapper into the agent's action capability array."""
+        self.tools_registry[name] = {
+            "function": func,
             "description": description,
-            "parameters": parameters
+            "parameters_help": parameter_definitions
         }
-        logger.debug(f"Registered tool: {name}")
-    
-    def get_tools_description(self) -> str:
-        """Get formatted description of all available tools"""
-        tools_desc = []
-        for name, tool in self.available_tools.items():
-            params = ", ".join([f"{k}: {v}" for k, v in tool['parameters'].items()])
-            tools_desc.append(f"- {name}({params}): {tool['description']}")
-        return "\n".join(tools_desc)
-    
-    async def run(
-        self,
-        query: str,
-        conversation_history: List[Dict[str, str]] = None
-    ) -> Dict[str, Any]:
-        """
-        Run agent with autonomous tool selection
+        logger.info(f"Dynamically registered executable agent tool: '{name}'")
+
+    def _compile_tools_prompt_payload(self) -> str:
+        """Assembles a highly readable, structured dictionary index mapping of all live tool descriptions."""
+        payload_lines = []
+        for name, meta in self.tools_registry.items():
+            payload_lines.append(f"- Tool Name: '{name}'\n  Capabilities: {meta['description']}\n  Expected Signature: {meta['parameters_help']}\n")
+        return "\n".join(payload_lines)
+
+    async def execute_reasoning_cycle(self, user_query: str, max_turns: int = 6) -> Dict[str, Any]:
+        """Runs the main ReAct loop: thinks, selects tools, records observations, and synthesizes answers."""
+        logger.info(f"Initializing autonomous reasoning loop for request: '{user_query}'")
         
-        Args:
-            query: User query
-            conversation_history: Previous conversation messages
+        execution_history: List[Dict[str, Any]] = []
+        current_turn = 0
+        
+        while current_turn < max_turns:
+            current_turn += 1
+            logger.info(f"Starting agent reasoning execution turn [{current_turn}/{max_turns}]...")
             
-        Returns:
-            Agent response with tool calls and final answer
-        """
-        try:
-            # Initialize
-            if conversation_history is None:
-                conversation_history = []
-            
-            iteration = 0
-            tool_results = []
-            thoughts = []
-            
-            # Agent loop
-            while iteration < self.max_iterations:
-                iteration += 1
-                logger.info(f"Agent iteration {iteration}/{self.max_iterations}")
-                
-                # Check for repeated tool calls (prevent loops)
-                if iteration > 3:
-                    # Check if last 3 tool calls were the same
-                    if len(tool_results) >= 3:
-                        last_three = [tr['tool'] for tr in tool_results[-3:]]
-                        if len(set(last_three)) == 1 and last_three[0] == tool_results[-1]['tool']:
-                            logger.warning(f"Agent is looping on tool {last_three[0]}, forcing final answer")
-                            # Force agent to synthesize results
-                            decision = await self._get_agent_decision(
-                                query=query,
-                                conversation_history=conversation_history,
-                                tool_results=tool_results,
-                                thoughts=thoughts,
-                                force_synthesize=True
-                            )
-                            if decision['action'] == 'final_answer':
-                                return {
-                                    'answer': decision['content'],
-                                    'tool_calls': tool_results,
-                                    'iterations': iteration,
-                                    'thoughts': thoughts,
-                                    'completed': True,
-                                    'forced_stop': True
-                                }
-                
-                # Get LLM decision
-                decision = await self._get_agent_decision(
-                    query=query,
-                    conversation_history=conversation_history,
-                    tool_results=tool_results,
-                    thoughts=thoughts
+            # Build up the contextual historical trace log string
+            history_accumulator = []
+            for past_turn in execution_history:
+                history_accumulator.append(
+                    f"Turn {past_turn['turn']} Thought: {past_turn['thought']}\n"
+                    f"Action Taken: Invoked tool '{past_turn['tool']}' with parameters {past_turn['params']}\n"
+                    f"Resulting Observation: {json.dumps(past_turn['observation'])}\n"
                 )
-                
-                # Check if agent is done
-                if decision['action'] == 'final_answer':
-                    return {
-                        'answer': decision['content'],
-                        'tool_calls': tool_results,
-                        'iterations': iteration,
-                        'thoughts': thoughts,
-                        'completed': True
-                    }
-                
-                # Execute tool
-                if decision['action'] == 'use_tool':
-                    tool_name = decision['tool_name']
-                    tool_params = decision['parameters']
-                    
-                    logger.info(f"Executing tool: {tool_name} with params: {tool_params}")
-                    
-                    result = await self._execute_tool(tool_name, tool_params)
-                    
-                    tool_results.append({
-                        'tool': tool_name,
-                        'parameters': tool_params,
-                        'result': result
-                    })
-                    
-                    thoughts.append(decision.get('thought', ''))
-                    
-                    # Check if we have sufficient results to answer
-                    if iteration >= 2 and tool_results:
-                        # If we have results from RAG search, we likely have enough
-                        rag_results = [tr for tr in tool_results if tr['tool'] == 'search_emails_rag']
-                        if rag_results and rag_results[0]['result'].get('count', 0) > 0:
-                            # We have RAG results, suggest synthesizing
-                            logger.info("RAG results found, agent should synthesize answer")
-                
-                # Store thought
-                elif decision['action'] == 'think':
-                    thoughts.append(decision['thought'])
+            history_trace_str = "\n".join(history_accumulator) if history_accumulator else "No previous tool execution turns have been run yet."
+
+            planner_prompt = f"""You are the central nervous system of an intelligent Google Workspace Agent.
+            Your objective is to completely fulfill the user's intended request by selecting appropriate tools step-by-step, analyzing results, and outputting a comprehensive response.
+
+            User Target Request: "{user_query}"
+
+            =========================================================
+            LIVE ACTIONABLE TOOL SELECTION MATRIX
+            =========================================================
+            {self._compile_tools_prompt_payload()}
+
+            =========================================================
+            HISTORICAL RUNTIME TRACE OBSERVATIONS
+            =========================================================
+            {history_trace_str}
+
+            =========================================================
+            CRITICAL EXECUTION POLICIES
+            =========================================================
+            1. If the user query requires reading recent email data, ALWAYS use 'search_emails_rag' FIRST to gather context.
+            2. If the semantic results yield a promising match indicator, capture its 'email_id' and invoke 'get_email_details' exactly ONCE to review the full content.
+            3. Review your Historical Trace log carefully. DO NOT call the exact same tool with the exact same argument parameters repeatedly. If a tool comes back empty, try a different strategy or conclude with a clean final answer.
+            4. Stop executing immediately and return 'final_answer' once you have gathered sufficient metrics to fully resolve the user's query.
+
+            Determine your immediate next decision. You must respond strictly in structural JSON format matching the requested schema definition.
+            """
+            # Request a structured Pydantic schema return directly from our Gemini Client
+            decision: AgentDecision = self.gemini_client.generate_structured_output(
+                prompt=planner_prompt,
+                response_schema=AgentDecision
+            )
             
-            # Max iterations reached
-            return {
-                'answer': "I've exhausted my thinking iterations. Please rephrase your query.",
-                'tool_calls': tool_results,
-                'iterations': iteration,
-                'completed': False
-            }
+            logger.info(f"Agent Turn Thought: \"{decision.thought}\"")
             
-        except Exception as e:
-            logger.error(f"Error in agent run: {e}")
-            return {
-                'answer': f"I encountered an error: {str(e)}",
-                'error': str(e),
-                'completed': False
-            }
-    
-    async def _get_agent_decision(
-        self,
-        query: str,
-        conversation_history: List[Dict[str, str]],
-        tool_results: List[Dict[str, Any]],
-        thoughts: List[str],
-        force_synthesize: bool = False
-    ) -> Dict[str, Any]:
-        """
-        Get LLM's decision on what to do next
-        
-        Returns:
-            Decision dict with action and parameters
-        """
-        tools_description = self.get_tools_description()
-        
-        # Build context
-        context_parts = []
-        
-        if conversation_history:
-            # Include more context from conversation history
-            history_text = "\n".join([
-                f"{msg['role'].upper()}: {msg['content']}"
-                for msg in conversation_history[-10:]  # Last 10 messages for better context
-            ])
-            context_parts.append(f"CONVERSATION HISTORY (Use this to understand context and previous questions):\n{history_text}\n\nIMPORTANT: If the user asks about 'previous question', 'last question', 'what did I ask', etc., refer to the conversation history above.")
-        
-        if tool_results:
-            results_text = []
-            for tr in tool_results:
-                result = tr['result']
-                # Format result more clearly
-                if isinstance(result, dict):
-                    if result.get('complete') and result.get('body'):
-                        # Email details result - highlight that it's complete
-                        results_text.append(
-                            f"Tool: {tr['tool']} (email_id: {result.get('email_id', 'N/A')})\n"
-                            f"Status: ✅ COMPLETE EMAIL RETRIEVED\n"
-                            f"Body length: {result.get('body_length', len(result.get('body', '')))} characters\n"
-                            f"Message: {result.get('message', 'Full email content available')}\n"
-                            f"Subject: {result.get('subject', 'N/A')}\n"
-                            f"Body preview: {result.get('body', '')[:500]}...\n"
-                            f"⚠️ DO NOT call get_email_details again for this email_id - you already have the complete email!"
-                        )
-                    elif result.get('emails'):
-                        # Search results
-                        email_count = result.get('count', 0)
-                        results_text.append(
-                            f"Tool: {tr['tool']}\n"
-                            f"Found {email_count} emails matching query.\n"
-                            f"Email IDs: {[e.get('email_id') for e in result.get('emails', [])[:5]]}\n"
-                            f"To get full content, use get_email_details with one of these email_ids."
-                        )
-                    else:
-                        results_text.append(f"Tool: {tr['tool']}\nResult: {str(result)[:500]}")
+            # Flow Route 1: The agent is ready to conclude and return its final answer
+            if decision.action == "final_answer":
+                logger.info("Agent concluded the loop natively. Formulating final response summary.")
+                return {
+                    "answer": decision.final_output,
+                    "history": execution_history,
+                    "turns_utilized": current_turn,
+                    "completed": True
+                }
+                
+            # Flow Route 2: The agent decided it needs to run a local workspace tool
+            if decision.action == "use_tool":
+                t_name = decision.tool_name
+                t_params = decision.parameters or {}
+                
+                logger.info(f"Agent requested tool execution pass: targetting '{t_name}' using args: {t_params}")
+                
+                if t_name not in self.tools_registry:
+                    observation_result = f"Error: The tool target '{t_name}' does not exist inside our registered index matrix."
+                    logger.error(observation_result)
                 else:
-                    results_text.append(f"Tool: {tr['tool']}\nResult: {str(result)[:500]}")
-            
-            context_parts.append(f"Previous Tool Results:\n{chr(10).join(results_text)}")
-        
-        if thoughts:
-            context_parts.append(f"Previous Thoughts:\n{chr(10).join(thoughts[-3:])}")
-        
-        context = "\n\n".join(context_parts) if context_parts else "No previous context."
-        
-        # Add warning if forcing synthesis
-        synthesis_warning = ""
-        if force_synthesize:
-            synthesis_warning = "\n\n⚠️ CRITICAL: You have called the same tool multiple times. You MUST synthesize the results you have and provide a final_answer. Do NOT call any more tools!"
-        
-        # Create agent prompt
-        agent_prompt = f"""You are an autonomous email assistant agent. You can use tools to help answer the user's query.
-{synthesis_warning}
+                    try:
+                        # Fetch the function reference wrapper from the tools registry map
+                        target_callable = self.tools_registry[t_name]["function"]
+                        
+                        # Dynamically unpack the JSON parameters straight into the method execution call
+                        if asyncio.iscoroutinefunction(target_callable):
+                            observation_result = await target_callable(**t_params)
+                        else:
+                            observation_result = target_callable(**t_params)
+                    except Exception as e:
+                        observation_result = f"Exception encountered during tool execution stream: {str(e)}"
+                        logger.error(observation_result)
 
-User Query: {query}
-
-{context}
-
-Available Tools:
-{tools_description}
-
-Based on the query and context, decide what to do next. Respond in JSON format with ONE of these actions:
-
-1. If you need to use a tool:
-{{
-    "action": "use_tool",
-    "tool_name": "tool_name_here",
-    "parameters": {{"param1": "value1", "param2": "value2"}},
-    "thought": "Why I'm using this tool"
-}}
-
-2. If you have enough information to answer:
-{{
-    "action": "final_answer",
-    "content": "Your complete answer to the user",
-    "thought": "Why this is the final answer"
-}}
-
-3. If you need to think more:
-{{
-    "action": "think",
-    "thought": "What I'm analyzing or considering"
-}}
-
-CRITICAL RULES:
-1. **For email queries, ALWAYS use search_emails_rag FIRST** (emails are indexed daily via autoindex)
-2. **If search_emails_rag returns results, use get_email_details ONCE for full content** - DO NOT call it multiple times!
-3. **If get_email_details returns 'complete: True' and 'body' field, you have the FULL email** - STOP and synthesize answer!
-4. **Only use search_emails_gmail if RAG didn't find what you need**
-5. **STOP and give final_answer when you have sufficient information** - don't keep searching!
-6. **If tool result shows '✅ COMPLETE EMAIL RETRIEVED', you MUST synthesize and give final_answer** - do NOT call get_email_details again!
-7. **Use conversation history** - If user asks about "previous question" or "what did I ask", check conversation history above
-8. **Maximum 3-4 tool calls per query** - if you've called tools 3+ times, you likely have enough info
-
-IMPORTANT:
-- Use tools when you need to fetch or manipulate data
-- You can call MULTIPLE tools if needed (one at a time)
-- Give final_answer when you have sufficient information - DON'T keep searching!
-- If previous tool results already answered the query, synthesize them and give final_answer
-- Be autonomous - make decisions based on the query
-
-Your decision (JSON only):"""
-        
-        messages = [
-            {
-                "role": "system",
-                "content": "You are an autonomous agent. Think step by step and use tools when needed. Always respond with valid JSON."
-            },
-            {
-                "role": "user",
-                "content": agent_prompt
-            }
-        ]
-        
-        response = await self.azure_client.generate_response(
-            messages=messages,
-            max_tokens=500
-        )
-        
-        # Parse JSON decision
-        try:
-            decision = json.loads(response)
-            logger.info(f"Agent decision: {decision['action']} - {decision.get('thought', '')[:100]}")
-            return decision
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse agent decision: {response}")
-            # Fallback
-            return {
-                "action": "final_answer",
-                "content": "I had trouble deciding what to do. Please rephrase your query.",
-                "thought": "JSON parse error"
-            }
-    
-    async def _execute_tool(self, tool_name: str, parameters: Dict[str, Any]) -> Any:
-        """Execute a tool with given parameters"""
-        if tool_name not in self.available_tools:
-            return f"Error: Tool '{tool_name}' not found"
-        
-        try:
-            tool = self.available_tools[tool_name]
-            function = tool['function']
-            
-            # Execute function (handle both sync and async)
-            result = function(**parameters)
-            
-            if hasattr(result, '__await__'):
-                result = await result
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"Error executing tool {tool_name}: {e}")
-            return f"Error executing {tool_name}: {str(e)}"
+                # Commit this entire turn loop's analytical execution trace record back into the state machine
+                execution_history.append({
+                    "turn": current_turn,
+                    "thought": decision.thought,
+                    "tool": t_name,
+                    "params": t_params,
+                    "observation": observation_result
+                })
+                
+        # Fallback termination edge case if loop max iterations bounds get breached
+        return {
+            "answer": "I reached my execution cycle limits before synthesizing a clean workspace answer. Please refine your query parameters.",
+            "history": execution_history,
+            "turns_utilized": current_turn,
+            "completed": False
+        }

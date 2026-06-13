@@ -46,13 +46,19 @@ class GeminiClient:
     def generate_structured_output(self, prompt: str, response_schema: Type[BaseModel]) -> BaseModel:
         """
         Forces Gemini to return structured, type-safe data matching a Pydantic class.
-        Crucial for reliable tool-calling parsing and UI JSON telemetry delivery.
+        Cleans the generated schema to prevent 400 INVALID_ARGUMENT errors.
         """
         try:
+            # 1. Generate the raw schema dictionary from Pydantic
+            raw_schema = response_schema.model_json_schema()
+            
+            # 2. Deeply clean the dictionary to strip out API-breaking keys
+            cleaned_schema = self._clean_schema_keys(raw_schema)
+            
             config = types.GenerateContentConfig(
                 response_mime_type="application/json",
-                response_schema=response_schema,
-                temperature=0.1,  # Strict determinism for schema adherence
+                response_schema=cleaned_schema,
+                temperature=0.1,
             )
             
             response = self.client.models.generate_content(
@@ -61,8 +67,18 @@ class GeminiClient:
                 config=config
             )
             
-            # Rehydrate the JSON string back into the verified Pydantic model instance
             return response_schema.model_validate_json(response.text)
         except Exception as e:
             logger.error(f"Error during Gemini structured schema parsing: {e}")
             raise e
+
+    def _clean_schema_keys(self, schema: Any) -> Any:
+        """Recursively removes 'additionalProperties' and titles from schema definitions."""
+        if isinstance(schema, dict):
+            # Drop keys that conflict with Gemini's strict OpenAPI validator
+            cleaned = {k: self._clean_schema_keys(v) for k, v in schema.items() 
+                       if k not in ["additionalProperties", "title"]}
+            return cleaned
+        elif isinstance(schema, list):
+            return [self._clean_schema_keys(item) for item in schema]
+        return schema

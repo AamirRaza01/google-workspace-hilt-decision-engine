@@ -73,14 +73,14 @@ class PersistentVectorStore:
         except Exception as e:
             logger.error(f"Failed inserting manual vector into collection: {e}")
 
-    def query_semantic_matches(self, user_query: str, max_results: int = 5) -> List[Dict[str, Any]]:
+    def query_semantic_matches(self, query: str, max_results: int = 5) -> List[Dict[str, Any]]:
         """Queries database records using manual vector representations for maximum control."""
         try:
             if self.collection.count() == 0:
                 return []
 
             # Pre-calculate the search text query vector natively
-            query_vector = self._get_embedding_vector(user_query)
+            query_vector = self._get_embedding_vector(query)
 
             # Query the database collection using the computed float coordinate layout
             results = self.collection.query(

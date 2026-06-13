@@ -1,5 +1,7 @@
-"""Agent nodes for LangGraph workflow"""
+from .base_agent import BaseWorkspaceAgent
+from .schemas import AgentDecision
 
-from .base_agent import BaseAgent
-
-__all__ = ["BaseAgent"]
+__all__ = [
+    "BaseWorkspaceAgent",
+    "AgentDecision"
+]

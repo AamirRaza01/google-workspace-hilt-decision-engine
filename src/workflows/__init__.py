@@ -1,7 +1,3 @@
-"""LangGraph workflows and agents"""
+from .autonomous_agent import AutonomousWorkspaceAgent
 
-from .email_assistant import EmailAssistant
-from .execution_planner import ExecutionPlanner
-from .autonomous_agent import AutonomousEmailAgent
-
-__all__ = ["EmailAssistant", "ExecutionPlanner", "AutonomousEmailAgent"]
+__all__ = ["AutonomousWorkspaceAgent"]
