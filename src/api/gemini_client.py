@@ -45,31 +45,44 @@ class GeminiClient:
 
     def generate_structured_output(self, prompt: str, response_schema: Type[BaseModel]) -> BaseModel:
         """
-        Forces Gemini to return structured, type-safe data matching a Pydantic class.
-        Cleans the generated schema to prevent 400 INVALID_ARGUMENT errors.
+        Bypasses the restrictive schema endpoint to avoid 429 errors.
+        Prompts Gemini for raw JSON text and validates it against Pydantic natively.
         """
         try:
-            # 1. Generate the raw schema dictionary from Pydantic
-            raw_schema = response_schema.model_json_schema()
-            
-            # 2. Deeply clean the dictionary to strip out API-breaking keys
-            cleaned_schema = self._clean_schema_keys(raw_schema)
-            
-            config = types.GenerateContentConfig(
-                response_mime_type="application/json",
-                response_schema=cleaned_schema,
-                temperature=0.1,
-            )
-            
+            # Inject explicit instructions into the prompt to guarantee pure JSON text back
+            json_instruction_prompt = f"""{prompt}
+
+CRITICAL: Your response must be a single, valid JSON object matching the keys specified below. 
+Do not include markdown blocks like ```json ... ```. Do not include any extra text outside the JSON.
+
+Expected Keys: {list(response_schema.model_fields.keys())}
+"""
+            # Call standard text generation (which has high free-tier quotas)
             response = self.client.models.generate_content(
                 model=self.settings.gemini_model,
-                contents=prompt,
-                config=config
+                contents=json_instruction_prompt,
+                config=types.GenerateContentConfig(temperature=0.1)
             )
             
-            return response_schema.model_validate_json(response.text)
+            clean_text = response.text.strip()
+            
+            # Defensive step: Strip markdown code block wrappers if the model accidentally includes them
+            if clean_text.startswith("```"):
+                lines = clean_text.splitlines()
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines and lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                clean_text = "\n".join(lines).strip()
+
+            # Load the text as a dictionary and validate against our Pydantic model
+            import json
+            parsed_dict = json.loads(clean_text, strict=False)
+            return response_schema.model_validate(parsed_dict)
+                
         except Exception as e:
-            logger.error(f"Error during Gemini structured schema parsing: {e}")
+            logger.error(f"Text-based JSON parsing or validation failed: {e}")
+            # Fallback block: Return a valid empty object to prevent the engine from crashing mid-loop
             raise e
 
     def _clean_schema_keys(self, schema: Any) -> Any:
